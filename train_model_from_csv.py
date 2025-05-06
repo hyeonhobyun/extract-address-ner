@@ -1,0 +1,72 @@
+import asyncio
+import torch
+import os
+from datetime import datetime
+import pandas as pd
+from app.utils.preprocess import (
+    load_and_preprocess_data,
+    create_bio_tags,
+    split_data,
+)
+from app.services.train_service import ModelTrainer
+
+
+async def train_model_from_csv():
+    """CSV 파일에서 데이터를 로드하여 RoBERTa + BiLSTM + CRF 모델 학습"""
+    print("CSV 파일에서 RoBERTa + BiLSTM + CRF 모델 학습 시작...")
+
+    # 데이터 로드 및 전처리
+    csv_path = "data/korean_address_dataset.csv"
+
+    try:
+        # 필요한 디렉토리 생성
+        os.makedirs("./models", exist_ok=True)
+        os.makedirs("./models/address_ner_model", exist_ok=True)
+
+        # 데이터 준비
+        df = load_and_preprocess_data(csv_path)
+        print(f"데이터 로드 완료. 총 {len(df)} 개의 데이터.")
+
+        # 모델 훈련기 초기화
+        trainer = ModelTrainer()
+
+        # 모델 학습
+        result = await trainer.train_model()
+
+        # 결과 출력
+        print(f"모델 학습 완료. 버전: {result['version']}")
+        print(f"성능 지표:")
+        print(f"  - 정확도: {result['metrics']['accuracy']:.4f}")
+        print(f"  - F1 점수: {result['metrics']['f1']:.4f}")
+        print(f"  - 정밀도: {result['metrics']['precision']:.4f}")
+        print(f"  - 재현율: {result['metrics']['recall']:.4f}")
+        print(f"모델 저장 경로: ./models/address_ner_model")
+
+        return result
+
+    except Exception as e:
+        print(f"모델 학습 중 오류 발생: {str(e)}")
+        raise
+
+
+if __name__ == "__main__":
+    # 필수 패키지 확인
+    try:
+        import torch
+        from torchcrf import CRF
+        from transformers import AutoModel, AutoTokenizer
+
+        print(f"PyTorch 버전: {torch.__version__}")
+        print(f"CUDA 사용 가능: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"CUDA 장치: {torch.cuda.get_device_name(0)}")
+        print("모델 학습에 필요한 모든 패키지가 설치되어 있습니다.")
+    except ImportError as e:
+        print(f"패키지 불러오기 오류: {e}")
+        print(
+            "필요한 패키지가 설치되어 있지 않습니다. 'pip install -r requirements.txt'를 실행하세요."
+        )
+        exit(1)
+
+    # 비동기 함수 실행
+    asyncio.run(train_model_from_csv())
