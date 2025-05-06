@@ -44,7 +44,7 @@ class ModelTrainer:
         self.dropout = 0.1
         self.num_labels = 3  # O, B-ADDRESS, I-ADDRESS
 
-    async def train_model(self, custom_data=None):
+    async def train_model(self, custom_data=None, epochs=5, batch_size=16):
         """주소 추출 모델 학습"""
         print("모델 학습 시작...")
         start_time = time.time()
@@ -91,7 +91,6 @@ class ModelTrainer:
         train_dataset = AddressDataset(train_data, self.tokenizer)
         test_dataset = AddressDataset(test_data, self.tokenizer)
 
-        batch_size = 16
         train_dataloader = DataLoader(
             train_dataset, batch_size=batch_size, shuffle=True
         )
@@ -125,14 +124,15 @@ class ModelTrainer:
         ]
 
         optimizer = AdamW(optimizer_grouped_parameters, lr=3e-5)
-        epochs = 5
         total_steps = len(train_dataloader) * epochs
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
             num_warmup_steps=total_steps * 0.1,
             num_training_steps=total_steps,
         )
-        print(f"학습 설정: 에폭 {epochs}개, 총 스텝 {total_steps}개")
+        print(
+            f"학습 설정: 에폭 {epochs}개, 배치 크기 {batch_size}, 총 스텝 {total_steps}개"
+        )
 
         # 학습 루프
         print(f"모델을 {self.device}로 이동 중...")

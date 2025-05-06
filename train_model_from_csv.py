@@ -11,9 +11,12 @@ from app.utils.preprocess import (
 from app.services.train_service import ModelTrainer
 
 
-async def train_model_from_csv(csv_path="data/korean_address_dataset.csv"):
+async def train_model_from_csv(
+    csv_path="data/korean_address_dataset.csv", epochs=5, batch_size=16
+):
     """CSV 파일에서 데이터를 로드하여 RoBERTa + BiLSTM + CRF 모델 학습"""
     print("CSV 파일에서 RoBERTa + BiLSTM + CRF 모델 학습 시작...")
+    print(f"설정: 에폭 {epochs}회, 배치 크기 {batch_size}")
 
     # 데이터 로드 및 전처리
     try:
@@ -28,8 +31,8 @@ async def train_model_from_csv(csv_path="data/korean_address_dataset.csv"):
         # 모델 훈련기 초기화
         trainer = ModelTrainer()
 
-        # 모델 학습
-        result = await trainer.train_model()
+        # 모델 학습 - 에폭과 배치 크기 전달
+        result = await trainer.train_model(epochs=epochs, batch_size=batch_size)
 
         # 결과 출력
         print(f"모델 학습 완료. 버전: {result['version']}")
@@ -47,7 +50,9 @@ async def train_model_from_csv(csv_path="data/korean_address_dataset.csv"):
         raise
 
 
-def run_training(csv_path="data/korean_address_dataset.csv"):
+def run_training(
+    csv_path="data/korean_address_dataset.csv", epochs=5, batch_size=16
+):
     """Jupyter/Kaggle 환경에서도 작동하는 학습 함수"""
     # 필수 패키지 확인
     try:
@@ -78,13 +83,19 @@ def run_training(csv_path="data/korean_address_dataset.csv"):
                 import nest_asyncio
 
                 nest_asyncio.apply()
-                return asyncio.run(train_model_from_csv(csv_path))
+                return asyncio.run(
+                    train_model_from_csv(csv_path, epochs, batch_size)
+                )
             except ImportError:
                 # nest_asyncio가 없는 경우 현재 루프 사용
-                return loop.run_until_complete(train_model_from_csv(csv_path))
+                return loop.run_until_complete(
+                    train_model_from_csv(csv_path, epochs, batch_size)
+                )
         else:
             # 일반 환경인 경우
-            return asyncio.run(train_model_from_csv(csv_path))
+            return asyncio.run(
+                train_model_from_csv(csv_path, epochs, batch_size)
+            )
     except RuntimeError as e:
         if "already running" in str(e):
             print(
