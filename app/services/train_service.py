@@ -65,6 +65,14 @@ class ModelTrainer:
         dataset = create_bio_tags(df)
         print(f"BIO 태깅 생성 완료: {len(dataset)}개 데이터")
 
+        # 데이터셋 크기에 따라 배치 크기 조정
+        if len(dataset) < batch_size * 2:
+            adj_batch_size = max(1, len(dataset) // 4)
+            print(
+                f"경고: 데이터셋이 작아서 배치 크기를 {batch_size}에서 {adj_batch_size}로 조정합니다."
+            )
+            batch_size = adj_batch_size
+
         train_data, test_data = split_data(dataset)
         print(
             f"데이터 분할 완료: 학습 데이터 {len(train_data)}개, 테스트 데이터 {len(test_data)}개"
@@ -283,162 +291,115 @@ class ModelTrainer:
     def _evaluate_model(self, test_dataloader):
         """모델 평가"""
         self.model.eval()
-        self.model.training_mode = False  # 디버깅 정보 끄기
 
-        eval_predictions = []
-        eval_true_labels = []
+        # 평가에 필요한 변수 초기화
+        all_predictions = []
+        all_labels = []
 
-        # 레이블 매핑
-        id_to_label = {0: "O", 1: "B-ADDRESS", 2: "I-ADDRESS"}
-
-        # 혼동 행렬 초기화
-        confusion_matrix = {
-            "TP": 0,  # True Positive
-            "FP": 0,  # False Positive
-            "FN": 0,  # False Negative
-            "TN": 0,  # True Negative
-        }
-
-        print(f"총 {len(test_dataloader)} 배치 평가 중...")
-        for batch_idx, batch in enumerate(test_dataloader):
-            # 평가 진행상황 (20개 배치마다 한 번씩 출력)
-            if batch_idx % 20 == 0:
-                print(
-                    f"  평가 배치 {batch_idx+1}/{len(test_dataloader)} 처리 중..."
-                )
-
-            input_ids = batch["input_ids"].to(self.device)
-            attention_mask = batch["attention_mask"].to(self.device)
-            labels = batch["labels"].to(self.device)
-
-            with torch.no_grad():
-                logits, _ = self.model(
-                    input_ids=input_ids, attention_mask=attention_mask
-                )
-
-                # CRF 디코딩으로 최적 태그 시퀀스 얻기
-                predictions = self.model.decode(logits, attention_mask)
-
-            # 배치의 각 시퀀스에 대해 처리
-            for i, (pred_seq, true_seq, mask) in enumerate(
-                zip(predictions, labels, attention_mask)
-            ):
-                pred_tags = []
-                true_tags = []
-
-                # 각 토큰에 대해 레이블 처리
-                valid_tokens = 0
-                correct_tokens = 0
-
-                # 유효한 토큰에 대해서만 처리 (패딩 제외)
-                for j, is_valid in enumerate(mask):
-                    if is_valid and j < len(pred_seq):
-                        valid_tokens += 1
-
-                        pred_id = pred_seq[j]
-                        true_id = true_seq[j].item()
-
-                        # 정수 ID를 문자열 태그로 변환
-                        pred_tag = id_to_label.get(pred_id, "O")
-                        true_tag = id_to_label.get(true_id, "O")
-
-                        # 정확도 계산용
-                        if pred_id == true_id:
-                            correct_tokens += 1
-
-                        # 혼동 행렬 업데이트 (ADDRESS 태그 식별 기준)
-                        if true_tag != "O":  # 실제 주소인 경우
-                            if pred_tag != "O":  # 주소로 예측한 경우
-                                confusion_matrix["TP"] += 1
-                            else:  # 주소가 아닌 것으로 예측한 경우
-                                confusion_matrix["FN"] += 1
-                        else:  # 실제 주소가 아닌 경우
-                            if pred_tag != "O":  # 주소로 예측한 경우
-                                confusion_matrix["FP"] += 1
-                            else:  # 주소가 아닌 것으로 예측한 경우
-                                confusion_matrix["TN"] += 1
-
-                        pred_tags.append(pred_tag)
-                        true_tags.append(true_tag)
-
-                # 평가를 위해 저장
-                if pred_tags:  # 빈 시퀀스가 아닌 경우에만
-                    eval_predictions.append(pred_tags)
-                    eval_true_labels.append(true_tags)
-
-        # 토큰 단위 정확도 계산
-        correct = 0
-        total = 0
-        for pred_seq, true_seq in zip(eval_predictions, eval_true_labels):
-            for pred_tag, true_tag in zip(pred_seq, true_seq):
-                if pred_tag == true_tag:
-                    correct += 1
-                total += 1
-
-        accuracy = correct / total if total > 0 else 0
-
-        # 혼동 행렬에서 지표 계산
-        tp = confusion_matrix["TP"]
-        fp = confusion_matrix["FP"]
-        fn = confusion_matrix["FN"]
-        tn = confusion_matrix["TN"]
-
-        print(f"혼동 행렬: TP={tp}, FP={fp}, FN={fn}, TN={tn}")
-
-        # 직접 F1 점수 계산
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-        f1 = (
-            2 * (precision * recall) / (precision + recall)
-            if (precision + recall) > 0
-            else 0
-        )
-
-        print(
-            f"직접 계산 - 정확도: {accuracy:.4f}, F1: {f1:.4f}, 정밀도: {precision:.4f}, 재현율: {recall:.4f}"
-        )
-
-        # seqeval로 F1 점수 계산
-        try:
-            seqeval_f1 = f1_score(eval_true_labels, eval_predictions)
-            seqeval_precision = precision_score(
-                eval_true_labels, eval_predictions
-            )
-            seqeval_recall = recall_score(eval_true_labels, eval_predictions)
-
-            # 상세 분류 보고서
-            report = classification_report(
-                eval_true_labels, eval_predictions, output_dict=True
-            )
-
-            # ADDRESS 엔티티에 대한 성능
-            address_metrics = {
-                "B-ADDRESS": report.get("B-ADDRESS", {"f1-score": 0}),
-                "I-ADDRESS": report.get("I-ADDRESS", {"f1-score": 0}),
+        # 예외 사항: 테스트 데이터셋이 작은 경우 처리
+        if len(test_dataloader) == 0:
+            print("경고: 테스트 데이터가 없어 평가를 건너뜁니다.")
+            return {
+                "accuracy": 0.0,
+                "f1": 0.0,
+                "precision": 0.0,
+                "recall": 0.0,
             }
 
-            print(
-                f"seqeval - 정확도: {accuracy:.4f}, F1: {seqeval_f1:.4f}, 정밀도: {seqeval_precision:.4f}, 재현율: {seqeval_recall:.4f}"
-            )
-            print(
-                f"주소 엔티티 성능: B-ADDRESS F1={address_metrics['B-ADDRESS'].get('f1-score', 0):.4f}, "
-                + f"I-ADDRESS F1={address_metrics['I-ADDRESS'].get('f1-score', 0):.4f}"
-            )
+        # 클래스별 ID-레이블 매핑
+        id_to_label = {0: "O", 1: "B-ADDRESS", 2: "I-ADDRESS"}
 
-            # 최종 평가 지표로 seqeval 결과 사용 (더 정확함)
-            f1 = seqeval_f1
-            precision = seqeval_precision
-            recall = seqeval_recall
+        with torch.no_grad():
+            for batch in test_dataloader:
+                # 배치 데이터 가져오기
+                input_ids = batch["input_ids"].to(self.device)
+                attention_mask = batch["attention_mask"].to(self.device)
+                labels = batch["labels"].to(self.device)
+
+                # 모델 추론
+                logits, _ = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels,
+                )
+
+                # 마스크 생성 (패딩 토큰 제외)
+                mask = attention_mask.bool()
+
+                # 예측 결과 디코딩
+                try:
+                    predictions = self.model.decode(logits, attention_mask=mask)
+                except Exception as e:
+                    print(f"디코딩 오류: {e}")
+                    predictions = logits.argmax(dim=2)
+
+                # 원래 레이블과 예측을 평평하게 만들기
+                for i in range(len(input_ids)):
+                    sample_mask = mask[i].tolist()
+                    valid_indices = [
+                        idx for idx, m in enumerate(sample_mask) if m
+                    ]
+
+                    if not valid_indices:  # 유효한 토큰이 없는 경우 건너뜀
+                        continue
+
+                    sample_preds = [
+                        id_to_label[predictions[i][idx].item()]
+                        for idx in valid_indices
+                    ]
+                    sample_labels = [
+                        id_to_label[labels[i][idx].item()]
+                        for idx in valid_indices
+                    ]
+
+                    all_predictions.append(sample_preds)
+                    all_labels.append(sample_labels)
+
+        # 예외 처리: 평가 데이터가 없는 경우
+        if not all_predictions or not all_labels:
+            print("경고: 평가를 위한 유효한 예측 또는 레이블이 없습니다.")
+            return {
+                "accuracy": 0.0,
+                "f1": 0.0,
+                "precision": 0.0,
+                "recall": 0.0,
+            }
+
+        try:
+            # seqeval 라이브러리로 평가
+            accuracy = sum(
+                1 for p, l in zip(all_predictions, all_labels) if p == l
+            ) / len(all_predictions)
+
+            # 혹시 오류가 발생할 경우를 대비해 try-except 추가
+            try:
+                f1 = f1_score(all_labels, all_predictions)
+                precision = precision_score(all_labels, all_predictions)
+                recall = recall_score(all_labels, all_predictions)
+            except Exception as e:
+                print(f"평가 지표 계산 오류: {e}, 기본값 반환")
+                f1 = 0.0
+                precision = 0.0
+                recall = 0.0
+
+            # 분류 보고서 출력
+            try:
+                report = classification_report(all_labels, all_predictions)
+                print("\n분류 보고서:")
+                print(report)
+            except Exception as e:
+                print(f"분류 보고서 생성 오류: {e}")
 
         except Exception as e:
-            print(f"seqeval F1 점수 계산 오류: {e}")
-            # 이미 직접 계산한 값 사용
-
-        print(f"정확도 계산 완료: {correct}/{total} = {accuracy:.4f}")
+            print(f"평가 중 오류 발생: {e}")
+            accuracy = 0.0
+            f1 = 0.0
+            precision = 0.0
+            recall = 0.0
 
         return {
-            "accuracy": float(accuracy),
-            "f1": float(f1),
-            "precision": float(precision),
-            "recall": float(recall),
+            "accuracy": accuracy,
+            "f1": f1,
+            "precision": precision,
+            "recall": recall,
         }

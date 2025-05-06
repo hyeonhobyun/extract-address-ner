@@ -11,7 +11,25 @@ def load_and_preprocess_data(csv_path="data/korean_address_dataset.csv"):
     try:
         # CSV 파일 로드
         if not os.path.exists(csv_path):
-            raise FileNotFoundError(f"CSV 파일을 찾을 수 없습니다: {csv_path}")
+            print(f"경고: CSV 파일을 찾을 수 없습니다: {csv_path}")
+
+            # Kaggle 환경에서의 대체 경로 시도
+            kaggle_paths = [
+                "/kaggle/input/korean-address-dataset/korean_address_dataset.csv",
+                "/kaggle/input/extract-address-ner/data/korean_address_dataset.csv",
+                "/kaggle/working/data/korean_address_dataset.csv",
+                "/kaggle/input/rootpath/data/korean_address_dataset.csv",
+            ]
+
+            for alt_path in kaggle_paths:
+                if os.path.exists(alt_path):
+                    print(f"대체 CSV 파일 발견: {alt_path}")
+                    csv_path = alt_path
+                    break
+
+            # 파일이 여전히 존재하지 않으면 기본 예제 데이터 사용
+            if not os.path.exists(csv_path):
+                return create_sample_data()
 
         print(f"CSV 파일 로드 중: {csv_path}")
         df = pd.read_csv(csv_path)
@@ -49,41 +67,77 @@ def load_and_preprocess_data(csv_path="data/korean_address_dataset.csv"):
 
     except Exception as e:
         print(f"CSV 파일 로드 오류: {e}")
-        # 오류 발생 시 기본 예제 데이터 사용
-        print("경고: 기본 예제 데이터를 사용합니다 (5개의 샘플 데이터)")
-        data = [
-            {
-                "text": "내일 서울특별시 강남구 테헤란로 123번길 45에서 회의가 있습니다.",
-                "is_address": 1,
-                "start": 3,
-                "end": 28,
-            },
-            {
-                "text": "경기도 성남시 분당구 판교역로 235 에서 만나자",
-                "is_address": 1,
-                "start": 0,
-                "end": 23,
-            },
-            {
-                "text": "우리 집은 제주특별자치도 서귀포시 123-45입니다",
-                "is_address": 1,
-                "start": 6,
-                "end": 25,
-            },
-            {
-                "text": "서울시 강남구 123길은 존재하지 않는 주소입니다",
-                "is_address": 0,
-                "start": 0,
-                "end": 13,
-            },
-            {
-                "text": "경기도 신도시에서 저녁을 먹었어요",
-                "is_address": 0,
-                "start": 0,
-                "end": 8,
-            },
-        ]
-        return pd.DataFrame(data)
+        return create_sample_data()
+
+
+def create_sample_data():
+    """샘플 데이터 생성"""
+    print("경고: 기본 예제 데이터를 사용합니다 (10개의 샘플 데이터)")
+    # 샘플 데이터 크기를 10개로 늘림
+    data = [
+        {
+            "text": "내일 서울특별시 강남구 테헤란로 123번길 45에서 회의가 있습니다.",
+            "is_address": 1,
+            "start": 3,
+            "end": 28,
+        },
+        {
+            "text": "경기도 성남시 분당구 판교역로 235 에서 만나자",
+            "is_address": 1,
+            "start": 0,
+            "end": 23,
+        },
+        {
+            "text": "우리 집은 제주특별자치도 서귀포시 123-45입니다",
+            "is_address": 1,
+            "start": 6,
+            "end": 25,
+        },
+        {
+            "text": "서울시 강남구 123길은 존재하지 않는 주소입니다",
+            "is_address": 0,
+            "start": 0,
+            "end": 13,
+        },
+        {
+            "text": "경기도 신도시에서 저녁을 먹었어요",
+            "is_address": 0,
+            "start": 0,
+            "end": 8,
+        },
+        # 추가 샘플 데이터 (5개 더 추가)
+        {
+            "text": "부산광역시 해운대구 해운대해변로 264",
+            "is_address": 1,
+            "start": 0,
+            "end": 22,
+        },
+        {
+            "text": "경상북도 경주시 보문로 507",
+            "is_address": 1,
+            "start": 0,
+            "end": 17,
+        },
+        {
+            "text": "인천광역시 중구 월미로 329",
+            "is_address": 1,
+            "start": 0,
+            "end": 16,
+        },
+        {
+            "text": "도로명주소가 아니라 그냥 동네 이름입니다",
+            "is_address": 0,
+            "start": 0,
+            "end": 10,
+        },
+        {
+            "text": "서울시 강동구 어딘가에 살고 있어요",
+            "is_address": 0,
+            "start": 0,
+            "end": 9,
+        },
+    ]
+    return pd.DataFrame(data)
 
 
 def create_bio_tags(df):
@@ -170,20 +224,42 @@ def create_bio_tags(df):
 
 def split_data(dataset, test_size=0.2, random_state=42):
     """데이터 학습/테스트 세트 분할"""
-    # 불균형을 고려한 층화 샘플링
-    # is_address 속성을 기준으로 층화
+    # 데이터 크기에 따라 stratify 사용 여부 결정
     is_address_list = [item["is_address"] for item in dataset]
-
-    # 데이터 인덱스 배열
     indices = np.arange(len(dataset))
 
-    # 층화 분할
-    train_indices, test_indices = train_test_split(
-        indices,
-        test_size=test_size,
-        random_state=random_state,
-        stratify=is_address_list,
-    )
+    # 데이터 크기와 클래스 분포 확인
+    dataset_size = len(dataset)
+    class_counts = {}
+    for is_address in is_address_list:
+        if is_address not in class_counts:
+            class_counts[is_address] = 0
+        class_counts[is_address] += 1
+
+    n_classes = len(class_counts)
+    min_test_size = n_classes + 1  # 최소한 클래스 수 + 1개의 샘플이 필요
+
+    # 계산된 테스트 크기(전체의 20%)가 최소 테스트 크기보다 작은지 확인
+    calculated_test_size = max(int(dataset_size * test_size), min_test_size)
+
+    # 데이터셋이 너무 작으면 stratify 사용하지 않음
+    if dataset_size < 20 or calculated_test_size <= n_classes:
+        print(
+            f"경고: 데이터셋이 작아서 stratify 없이 분할합니다 (크기: {dataset_size})"
+        )
+        train_indices, test_indices = train_test_split(
+            indices,
+            test_size=min(test_size, 0.5),  # 테스트 크기를 최대 50%로 제한
+            random_state=random_state,
+        )
+    else:
+        # 일반적인 경우: 층화 샘플링 사용
+        train_indices, test_indices = train_test_split(
+            indices,
+            test_size=test_size,
+            random_state=random_state,
+            stratify=is_address_list,
+        )
 
     # 인덱스를 사용하여 원본 데이터 분할
     train_data = [dataset[i] for i in train_indices]

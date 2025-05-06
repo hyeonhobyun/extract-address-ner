@@ -22,7 +22,23 @@ async def train_model_from_csv(
     # 데이터 로드 및 전처리
     try:
         # Kaggle 환경인지 확인
-        is_kaggle = "/kaggle/input" in csv_path
+        is_kaggle = os.path.exists("/kaggle")
+        print(f"Kaggle 환경: {is_kaggle}")
+
+        # Kaggle 환경에서 CSV 파일 경로 확인
+        if is_kaggle:
+            kaggle_paths = [
+                "/kaggle/input/korean-address-dataset/korean_address_dataset.csv",
+                "/kaggle/input/extract-address-ner/data/korean_address_dataset.csv",
+                "/kaggle/working/data/korean_address_dataset.csv",
+                "/kaggle/input/rootpath/data/korean_address_dataset.csv",
+            ]
+
+            for alt_path in kaggle_paths:
+                if os.path.exists(alt_path):
+                    print(f"Kaggle 환경에서 CSV 파일 발견: {alt_path}")
+                    csv_path = alt_path
+                    break
 
         # 모델 저장 경로 설정
         if is_kaggle:
@@ -40,29 +56,12 @@ async def train_model_from_csv(
         if not os.path.exists(csv_path):
             print(f"경고: {csv_path} 파일을 찾을 수 없습니다.")
 
-            # Kaggle 환경에서의 대체 경로 시도
-            if "/kaggle/input" in csv_path:
-                alt_paths = [
-                    "/kaggle/input/korean-address-dataset/korean_address_dataset.csv",
-                    "/kaggle/input/extract-address-ner/data/korean_address_dataset.csv",
-                ]
-
-                for alt_path in alt_paths:
-                    if os.path.exists(alt_path):
-                        print(f"대체 CSV 파일 발견: {alt_path}")
-                        csv_path = alt_path
-                        break
-
-        # 파일 존재 여부 최종 확인
-        if not os.path.exists(csv_path):
-            print(f"경고: CSV 파일을 찾을 수 없어 샘플 데이터로 학습합니다.")
-
         # 데이터 준비
         df = load_and_preprocess_data(csv_path)
         print(f"데이터 로드 완료. 총 {len(df)} 개의 데이터.")
 
-        # 샘플 데이터로 학습하고 있는지 확인 (5개 이하면 경고)
-        if len(df) <= 5:
+        # 샘플 데이터로 학습하고 있는지 확인 (10개 이하면 경고)
+        if len(df) <= 10:
             print(
                 "경고: 매우 적은 수의 데이터로 학습합니다. 이는 샘플 데이터일 가능성이 높습니다."
             )

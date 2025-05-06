@@ -198,33 +198,39 @@ class RoBERTaBiLSTMCRF(nn.Module):
     def decode(self, logits, attention_mask=None):
         """CRF를 사용한 최적 태그 시퀀스 디코딩"""
         if attention_mask is None:
+            # 기본적으로 모든 토큰이 유효하다고 가정
             mask = torch.ones(
-                logits.shape[:2], dtype=torch.bool, device=logits.device
+                logits.shape[0],
+                logits.shape[1],
+                dtype=torch.bool,
+                device=logits.device,
             )
         else:
             mask = attention_mask.bool()
 
+        # CRF 디코딩 시도
         try:
-            # CRF 디코딩 시도
-            decoded_seqs = self.crf.decode(logits, mask)
-            return decoded_seqs
+            # CRF 디코딩으로 최적의 태그 시퀀스 찾기
+            best_tags = self.crf.decode(logits, mask=mask)
+
+            # 결과를 텐서로 변환
+            result = []
+            for idx, tags in enumerate(best_tags):
+                # 현재 시퀀스의 마스크 길이 확인
+                seq_len = mask[idx].sum().item()
+                if seq_len == 0:  # 유효한 토큰이 없는 경우
+                    seq_len = 1  # 최소 1개는 반환
+
+                # logits 텐서와 동일한 크기로 패딩
+                padded_tags = tags + [0] * (logits.shape[1] - len(tags))
+                result.append(padded_tags[: logits.shape[1]])
+
+            return torch.tensor(result, device=logits.device)
+
         except Exception as e:
-            print(f"CRF 디코딩 오류: {e}")
-            # 대체 디코딩 방법으로 argmax 사용
-            _, preds = torch.max(logits, dim=2)
-
-            # 마스크 적용 - 패딩 부분은 0(O) 태그로 설정
-            preds = preds * mask.long()
-
-            # 배치 목록으로 변환
-            decoded_seqs = []
-            for i in range(preds.size(0)):
-                # 마스크가 있는 부분만 가져오기
-                valid_preds = preds[i][mask[i]].tolist()
-                decoded_seqs.append(valid_preds)
-
-            print("대체 디코딩 방법(argmax) 사용")
-            return decoded_seqs
+            # CRF 디코딩 실패 시 대체 방법으로 argmax 사용
+            print(f"CRF 디코딩 오류: {e}, argmax로 대체합니다.")
+            return logits.argmax(dim=2)
 
 
 class AddressModel:
