@@ -283,11 +283,21 @@ class ModelTrainer:
     def _evaluate_model(self, test_dataloader):
         """모델 평가"""
         self.model.eval()
+        self.model.training_mode = False  # 디버깅 정보 끄기
+
         eval_predictions = []
         eval_true_labels = []
 
         # 레이블 매핑
         id_to_label = {0: "O", 1: "B-ADDRESS", 2: "I-ADDRESS"}
+
+        # 혼동 행렬 초기화
+        confusion_matrix = {
+            "TP": 0,  # True Positive
+            "FP": 0,  # False Positive
+            "FN": 0,  # False Negative
+            "TN": 0,  # True Negative
+        }
 
         print(f"총 {len(test_dataloader)} 배치 평가 중...")
         for batch_idx, batch in enumerate(test_dataloader):
@@ -316,16 +326,40 @@ class ModelTrainer:
                 pred_tags = []
                 true_tags = []
 
+                # 각 토큰에 대해 레이블 처리
+                valid_tokens = 0
+                correct_tokens = 0
+
                 # 유효한 토큰에 대해서만 처리 (패딩 제외)
                 for j, is_valid in enumerate(mask):
-                    if is_valid:
-                        # 인덱스가 범위를 벗어나지 않게 확인
-                        if j < len(pred_seq):
-                            pred_tag = id_to_label[pred_seq[j]]
-                            true_tag = id_to_label[true_seq[j].item()]
+                    if is_valid and j < len(pred_seq):
+                        valid_tokens += 1
 
-                            pred_tags.append(pred_tag)
-                            true_tags.append(true_tag)
+                        pred_id = pred_seq[j]
+                        true_id = true_seq[j].item()
+
+                        # 정수 ID를 문자열 태그로 변환
+                        pred_tag = id_to_label.get(pred_id, "O")
+                        true_tag = id_to_label.get(true_id, "O")
+
+                        # 정확도 계산용
+                        if pred_id == true_id:
+                            correct_tokens += 1
+
+                        # 혼동 행렬 업데이트 (ADDRESS 태그 식별 기준)
+                        if true_tag != "O":  # 실제 주소인 경우
+                            if pred_tag != "O":  # 주소로 예측한 경우
+                                confusion_matrix["TP"] += 1
+                            else:  # 주소가 아닌 것으로 예측한 경우
+                                confusion_matrix["FN"] += 1
+                        else:  # 실제 주소가 아닌 경우
+                            if pred_tag != "O":  # 주소로 예측한 경우
+                                confusion_matrix["FP"] += 1
+                            else:  # 주소가 아닌 것으로 예측한 경우
+                                confusion_matrix["TN"] += 1
+
+                        pred_tags.append(pred_tag)
+                        true_tags.append(true_tag)
 
                 # 평가를 위해 저장
                 if pred_tags:  # 빈 시퀀스가 아닌 경우에만
@@ -343,11 +377,34 @@ class ModelTrainer:
 
         accuracy = correct / total if total > 0 else 0
 
+        # 혼동 행렬에서 지표 계산
+        tp = confusion_matrix["TP"]
+        fp = confusion_matrix["FP"]
+        fn = confusion_matrix["FN"]
+        tn = confusion_matrix["TN"]
+
+        print(f"혼동 행렬: TP={tp}, FP={fp}, FN={fn}, TN={tn}")
+
+        # 직접 F1 점수 계산
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = (
+            2 * (precision * recall) / (precision + recall)
+            if (precision + recall) > 0
+            else 0
+        )
+
+        print(
+            f"직접 계산 - 정확도: {accuracy:.4f}, F1: {f1:.4f}, 정밀도: {precision:.4f}, 재현율: {recall:.4f}"
+        )
+
         # seqeval로 F1 점수 계산
         try:
-            f1 = f1_score(eval_true_labels, eval_predictions)
-            precision = precision_score(eval_true_labels, eval_predictions)
-            recall = recall_score(eval_true_labels, eval_predictions)
+            seqeval_f1 = f1_score(eval_true_labels, eval_predictions)
+            seqeval_precision = precision_score(
+                eval_true_labels, eval_predictions
+            )
+            seqeval_recall = recall_score(eval_true_labels, eval_predictions)
 
             # 상세 분류 보고서
             report = classification_report(
@@ -356,29 +413,32 @@ class ModelTrainer:
 
             # ADDRESS 엔티티에 대한 성능
             address_metrics = {
-                "B-ADDRESS": report.get("B-ADDRESS", {}),
-                "I-ADDRESS": report.get("I-ADDRESS", {}),
+                "B-ADDRESS": report.get("B-ADDRESS", {"f1-score": 0}),
+                "I-ADDRESS": report.get("I-ADDRESS", {"f1-score": 0}),
             }
 
             print(
-                f"정확도: {accuracy:.4f}, F1: {f1:.4f}, 정밀도: {precision:.4f}, 재현율: {recall:.4f}"
+                f"seqeval - 정확도: {accuracy:.4f}, F1: {seqeval_f1:.4f}, 정밀도: {seqeval_precision:.4f}, 재현율: {seqeval_recall:.4f}"
             )
             print(
                 f"주소 엔티티 성능: B-ADDRESS F1={address_metrics['B-ADDRESS'].get('f1-score', 0):.4f}, "
                 + f"I-ADDRESS F1={address_metrics['I-ADDRESS'].get('f1-score', 0):.4f}"
             )
 
+            # 최종 평가 지표로 seqeval 결과 사용 (더 정확함)
+            f1 = seqeval_f1
+            precision = seqeval_precision
+            recall = seqeval_recall
+
         except Exception as e:
-            print(f"F1 점수 계산 오류: {e}")
-            f1 = 0
-            precision = 0
-            recall = 0
+            print(f"seqeval F1 점수 계산 오류: {e}")
+            # 이미 직접 계산한 값 사용
 
         print(f"정확도 계산 완료: {correct}/{total} = {accuracy:.4f}")
 
         return {
-            "accuracy": accuracy,
-            "f1": f1,
-            "precision": precision,
-            "recall": recall,
+            "accuracy": float(accuracy),
+            "f1": float(f1),
+            "precision": float(precision),
+            "recall": float(recall),
         }

@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import re
+import os
 from sklearn.model_selection import train_test_split
 from transformers import AutoTokenizer
 
@@ -9,7 +10,12 @@ def load_and_preprocess_data(csv_path="data/korean_address_dataset.csv"):
     """CSV 파일에서 데이터 로드 및 전처리"""
     try:
         # CSV 파일 로드
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"CSV 파일을 찾을 수 없습니다: {csv_path}")
+
+        print(f"CSV 파일 로드 중: {csv_path}")
         df = pd.read_csv(csv_path)
+        print(f"CSV 파일 로드 완료: {len(df)}개 데이터 발견")
 
         # 필요한 형식으로 변환
         processed_data = []
@@ -35,11 +41,16 @@ def load_and_preprocess_data(csv_path="data/korean_address_dataset.csv"):
                     {"text": text, "is_address": is_valid, "start": 0, "end": 0}
                 )
 
-        return pd.DataFrame(processed_data)
+        result_df = pd.DataFrame(processed_data)
+        print(
+            f"데이터 전처리 완료: 정상 주소 {result_df['is_address'].sum()}개, 비정상 주소 {len(result_df) - result_df['is_address'].sum()}개"
+        )
+        return result_df
 
     except Exception as e:
         print(f"CSV 파일 로드 오류: {e}")
         # 오류 발생 시 기본 예제 데이터 사용
+        print("경고: 기본 예제 데이터를 사용합니다 (5개의 샘플 데이터)")
         data = [
             {
                 "text": "내일 서울특별시 강남구 테헤란로 123번길 45에서 회의가 있습니다.",
@@ -77,70 +88,118 @@ def load_and_preprocess_data(csv_path="data/korean_address_dataset.csv"):
 
 def create_bio_tags(df):
     """BIO 태깅 방식으로 레이블 생성"""
+    print("BIO 태깅 시작...")
+    # 특수 토큰도 포함해서 적절히 처리하기 위해 tokenizer 준비
     tokenizer = AutoTokenizer.from_pretrained("klue/roberta-base")
 
-    dataset = []
-    for _, row in df.iterrows():
-        text = row["text"]
-        tokens = tokenizer.tokenize(text)
-        token_ids = tokenizer.convert_tokens_to_ids(tokens)
+    b_tags_count = 0
+    i_tags_count = 0
+    o_tags_count = 0
 
-        # 토큰 경계와 문자 단위 경계가 일치하지 않을 수 있으므로 조정이 필요함
+    dataset = []
+    for idx, row in enumerate(df.iterrows()):
+        _, row_data = row
+        text = row_data["text"]
+
+        # RoBERTa 토큰화 과정에는 특수 토큰이 추가됨
+        # 여기서 특수 토큰을 포함한 정확한 토큰 목록 가져오기
+        encoding = tokenizer(
+            text,
+            add_special_tokens=True,
+            return_offsets_mapping=True,
+            return_tensors="pt",
+        )
+
+        # 특수 토큰을 제외한 원래 토큰 위치
+        offset_mapping = encoding.offset_mapping[0].tolist()
+        tokens = tokenizer.convert_ids_to_tokens(encoding.input_ids[0])
+
+        # 모든 토큰에 'O' 태그 할당
         labels = ["O"] * len(tokens)
 
-        if row["is_address"] == 1:
-            start_char = row["start"]
-            end_char = row["end"]
+        if row_data["is_address"] == 1:
+            start_char = row_data["start"]
+            end_char = row_data["end"]
 
-            # 각 토큰의 시작 위치와 끝 위치를 찾아 BIO 태그 할당
-            char_idx = 0
-            in_entity = False
+            # 첫 번째 주소 토큰 찾았는지 여부
+            found_first = False
 
-            for i, token in enumerate(tokens):
-                token_len = len(token.replace("##", ""))
-                token_start = char_idx
-                token_end = char_idx + token_len
+            # 오프셋 매핑을 사용하여 각 토큰의 위치와 주소 위치 비교
+            for i, (token_start, token_end) in enumerate(offset_mapping):
+                # 특수 토큰([CLS], [SEP] 등)은 건너뜀 (start == end == 0)
+                if token_start == token_end:
+                    continue
 
+                # 토큰이 주소 범위 내에 있는지 확인
                 if token_start >= start_char and token_end <= end_char:
-                    if not in_entity:
+                    if not found_first:
                         labels[i] = "B-ADDRESS"
-                        in_entity = True
+                        found_first = True
+                        b_tags_count += 1
                     else:
                         labels[i] = "I-ADDRESS"
-                elif (
-                    token_start < start_char < token_end
-                    or token_start < end_char < token_end
-                ):
-                    # 부분적으로 겹치는 경우
-                    if not in_entity:
-                        labels[i] = "B-ADDRESS"
-                        in_entity = True
-                    else:
-                        labels[i] = "I-ADDRESS"
+                        i_tags_count += 1
                 else:
                     labels[i] = "O"
-                    in_entity = False
+                    o_tags_count += 1
 
-                char_idx += token_len
+        # 현재 레이블 추가 디버깅
+        if idx < 3:  # 처음 3개 예시만 출력
+            print(f"예시 {idx+1}:")
+            print(f"텍스트: {text}")
+            print(f"토큰: {tokens}")
+            print(f"레이블: {labels}")
+            print()
 
         dataset.append(
             {
                 "text": text,
                 "tokens": tokens,
-                "token_ids": token_ids,
+                "token_ids": encoding.input_ids[0].tolist(),
                 "labels": labels,
-                "is_address": row["is_address"],
+                "is_address": row_data["is_address"],
             }
         )
 
+    print(
+        f"BIO 태깅 완료: B-ADDRESS {b_tags_count}개, I-ADDRESS {i_tags_count}개, O {o_tags_count}개"
+    )
+    print(f"총 {len(dataset)}개 데이터셋 생성")
     return dataset
 
 
-def split_data(dataset):
+def split_data(dataset, test_size=0.2, random_state=42):
     """데이터 학습/테스트 세트 분할"""
-    train_data, test_data = train_test_split(
-        dataset, test_size=0.2, random_state=42
+    # 불균형을 고려한 층화 샘플링
+    # is_address 속성을 기준으로 층화
+    is_address_list = [item["is_address"] for item in dataset]
+
+    # 데이터 인덱스 배열
+    indices = np.arange(len(dataset))
+
+    # 층화 분할
+    train_indices, test_indices = train_test_split(
+        indices,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=is_address_list,
     )
+
+    # 인덱스를 사용하여 원본 데이터 분할
+    train_data = [dataset[i] for i in train_indices]
+    test_data = [dataset[i] for i in test_indices]
+
+    # 분포 확인
+    train_address = sum(1 for item in train_data if item["is_address"] == 1)
+    test_address = sum(1 for item in test_data if item["is_address"] == 1)
+
+    print(
+        f"학습 데이터: {len(train_data)}개 (정상 주소: {train_address}개, 비정상 주소: {len(train_data) - train_address}개)"
+    )
+    print(
+        f"테스트 데이터: {len(test_data)}개 (정상 주소: {test_address}개, 비정상 주소: {len(test_data) - test_address}개)"
+    )
+
     return train_data, test_data
 
 
