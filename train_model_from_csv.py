@@ -11,13 +11,11 @@ from app.utils.preprocess import (
 from app.services.train_service import ModelTrainer
 
 
-async def train_model_from_csv():
+async def train_model_from_csv(csv_path="data/korean_address_dataset.csv"):
     """CSV 파일에서 데이터를 로드하여 RoBERTa + BiLSTM + CRF 모델 학습"""
     print("CSV 파일에서 RoBERTa + BiLSTM + CRF 모델 학습 시작...")
 
     # 데이터 로드 및 전처리
-    csv_path = "data/korean_address_dataset.csv"
-
     try:
         # 필요한 디렉토리 생성
         os.makedirs("./models", exist_ok=True)
@@ -49,7 +47,8 @@ async def train_model_from_csv():
         raise
 
 
-if __name__ == "__main__":
+def run_training(csv_path="data/korean_address_dataset.csv"):
+    """Jupyter/Kaggle 환경에서도 작동하는 학습 함수"""
     # 필수 패키지 확인
     try:
         import torch
@@ -66,7 +65,43 @@ if __name__ == "__main__":
         print(
             "필요한 패키지가 설치되어 있지 않습니다. 'pip install -r requirements.txt'를 실행하세요."
         )
-        exit(1)
+        return False
 
-    # 비동기 함수 실행
-    asyncio.run(train_model_from_csv())
+    # 현재 환경 확인 및 적절한 방법으로 비동기 함수 실행
+    try:
+        # 이미 실행 중인 이벤트 루프가 있는지 확인 (Jupyter/Kaggle 환경)
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Jupyter/Kaggle 환경인 경우
+            try:
+                # nest_asyncio 사용 시도
+                import nest_asyncio
+
+                nest_asyncio.apply()
+                return asyncio.run(train_model_from_csv(csv_path))
+            except ImportError:
+                # nest_asyncio가 없는 경우 현재 루프 사용
+                return loop.run_until_complete(train_model_from_csv(csv_path))
+        else:
+            # 일반 환경인 경우
+            return asyncio.run(train_model_from_csv(csv_path))
+    except RuntimeError as e:
+        if "already running" in str(e):
+            print(
+                "이벤트 루프가 이미 실행 중입니다. Jupyter/Kaggle 환경으로 판단됩니다."
+            )
+            print("이 문제를 해결하려면 다음 명령을 먼저 실행하세요:")
+            print("!pip install nest_asyncio")
+            print("import nest_asyncio")
+            print("nest_asyncio.apply()")
+            return False
+        else:
+            raise
+    except Exception as e:
+        print(f"실행 중 오류 발생: {str(e)}")
+        raise
+
+
+if __name__ == "__main__":
+    # 비동기 함수 실행 - 모든 환경에서 호환되는 함수 사용
+    run_training()

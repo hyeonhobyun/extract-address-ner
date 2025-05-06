@@ -12,3 +12,4 @@ python-multipart==0.0.6
 asyncpg==0.30.0
 python-dotenv==1.1.0
 pytorch-crf==0.7.2
+nest-asyncio==1.5.8
