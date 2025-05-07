@@ -36,14 +36,10 @@ class ModelTrainer:
 
         # 멀티 GPU 지원 확인
         self.use_multi_gpu = torch.cuda.device_count() > 1
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
+        self.device = torch.device("cuda")
 
         # Mixed precision 학습을 위한 scaler 추가
-        self.scaler = (
-            torch.cuda.amp.GradScaler() if torch.cuda.is_available() else None
-        )
+        self.scaler = torch.cuda.amp.GradScaler()
 
         self.model_name = "klue/roberta-base"  # 한국어에 적합한 모델
         print(f"사용 디바이스: {self.device}")
@@ -72,8 +68,7 @@ class ModelTrainer:
 
         # 메모리 캐시 정리
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
 
         # 데이터 준비
         if custom_data:
@@ -141,13 +136,13 @@ class ModelTrainer:
             batch_size=batch_size,
             shuffle=True,
             num_workers=num_workers,
-            pin_memory=True if torch.cuda.is_available() else False,
+            pin_memory=True,
         )
         test_dataloader = DataLoader(
             test_dataset,
             batch_size=batch_size * 2,  # 평가 시 더 큰 배치 사용 가능
             num_workers=num_workers,
-            pin_memory=True if torch.cuda.is_available() else False,
+            pin_memory=True,
         )
         print(
             f"데이터로더 준비 완료: 학습 배치 {len(train_dataloader)}개, 테스트 배치 {len(test_dataloader)}개"
@@ -306,8 +301,7 @@ class ModelTrainer:
 
             # 메모리 정리
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
 
             # 평가
             print("에폭 평가 중...")
@@ -436,19 +430,7 @@ class ModelTrainer:
                 labels = batch["labels"].to(self.device)
 
                 # Mixed Precision 사용 (GPU 사용 시에만)
-                if self.scaler:
-                    with torch.cuda.amp.autocast():
-                        logits, _ = self.model(
-                            input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            labels=labels,
-                        )
-                        predictions = (
-                            self.model.module.decode(logits, attention_mask)
-                            if self.use_multi_gpu
-                            else self.model.decode(logits, attention_mask)
-                        )
-                else:
+                with torch.cuda.amp.autocast():
                     logits, _ = self.model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,

@@ -246,9 +246,7 @@ class AddressModel:
     def __init__(self):
         self.model = None
         self.tokenizer = None
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
+        self.device = torch.device("cuda")
         self.label_map = {0: "O", 1: "B-ADDRESS", 2: "I-ADDRESS"}
         self.model_name = "klue/roberta-base"  # 한국어에 적합한 모델
 
@@ -329,13 +327,7 @@ class AddressModel:
 
         # 예측 - Mixed Precision 사용 (GPU 사용 시)
         with torch.no_grad():
-            if torch.cuda.is_available():
-                with torch.cuda.amp.autocast():
-                    logits, _ = self.model(
-                        input_ids=encoding["input_ids"],
-                        attention_mask=encoding["attention_mask"],
-                    )
-            else:
+            with torch.cuda.amp.autocast():
                 logits, _ = self.model(
                     input_ids=encoding["input_ids"],
                     attention_mask=encoding["attention_mask"],
@@ -438,6 +430,36 @@ class AddressModel:
             )
 
         return addresses
+
+    async def predict(self, input_ids, attention_mask):
+        """주어진 입력에 대한 예측을 수행합니다."""
+        # 모델이 로드되지 않은 경우 로드
+        if self.model is None:
+            await self.load_model()
+
+        # CPU -> GPU 이동
+        input_ids = input_ids.to(self.device)
+        attention_mask = attention_mask.to(self.device)
+
+        # Inference 모드로 전환
+        self.model.eval()
+
+        # 예측 수행
+        with torch.no_grad():
+            # CUDA 메모리 최적화
+            torch.cuda.empty_cache()
+
+            # Forward pass
+            logits, _ = self.model(
+                input_ids=input_ids, attention_mask=attention_mask
+            )
+
+            # CRF 디코딩으로 최적의 태그 시퀀스 찾기
+            predictions = self.model.decode(
+                logits, attention_mask=attention_mask
+            )
+
+        return predictions
 
 
 # 전역 모델 인스턴스

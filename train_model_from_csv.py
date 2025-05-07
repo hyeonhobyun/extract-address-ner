@@ -32,9 +32,8 @@ async def train_model_from_csv(
 
     # 학습 시작 전 메모리 정리
     gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        print(f"CUDA 캐시 정리 완료")
+    torch.cuda.empty_cache()
+    print(f"CUDA 캐시 정리 완료")
 
     # 데이터 로드 및 전처리
     try:
@@ -99,34 +98,22 @@ async def train_model_from_csv(
             print(f"Windows 환경에서 실행 중이므로 워커 수를 0으로 설정합니다.")
 
         # 사용 가능한 GPU 확인 및 설정
-        if torch.cuda.is_available():
-            gpu_count = torch.cuda.device_count()
-            gpu_names = [
-                torch.cuda.get_device_name(i) for i in range(gpu_count)
-            ]
-            gpu_mem = [
-                torch.cuda.get_device_properties(i).total_memory / (1024**3)
-                for i in range(gpu_count)
-            ]
+        gpu_count = torch.cuda.device_count()
+        gpu_names = [torch.cuda.get_device_name(i) for i in range(gpu_count)]
+        gpu_mem = [
+            torch.cuda.get_device_properties(i).total_memory / (1024**3)
+            for i in range(gpu_count)
+        ]
 
-            print(f"사용 가능한 GPU: {gpu_count}개")
-            for i in range(gpu_count):
-                print(f"  - GPU {i}: {gpu_names[i]} ({gpu_mem[i]:.1f} GB)")
+        print(f"사용 가능한 GPU: {gpu_count}개")
+        for i in range(gpu_count):
+            print(f"  - GPU {i}: {gpu_names[i]} ({gpu_mem[i]:.1f} GB)")
 
-            # 메모리가 충분한 경우 배치 크기 자동 조정
-            if gpu_count > 0 and gpu_mem[0] > 16:  # 16GB 이상인 경우
-                batch_size = max(batch_size, 64)  # 최소 64로 설정
-                print(
-                    f"고성능 GPU 감지: 배치 크기를 {batch_size}로 자동 조정했습니다."
-                )
-        else:
-            print("CUDA를 사용할 수 없습니다. CPU로 학습합니다.")
-            # CPU 학습 시 효율성을 위해 배치 크기와 워커 수 조정
-            batch_size = min(batch_size, 16)
-            gradient_accumulation_steps = max(gradient_accumulation_steps, 4)
-            num_workers = min(num_workers, 2)
+        # 메모리가 충분한 경우 배치 크기 자동 조정
+        if gpu_count > 0 and gpu_mem[0] > 16:  # 16GB 이상인 경우
+            batch_size = max(batch_size, 64)  # 최소 64로 설정
             print(
-                f"CPU 학습을 위해 배치 크기({batch_size}), 그래디언트 누적 스텝({gradient_accumulation_steps}), 워커 수({num_workers})를 조정했습니다."
+                f"고성능 GPU 감지: 배치 크기를 {batch_size}로 자동 조정했습니다."
             )
 
         # 모델 훈련기 초기화
@@ -182,22 +169,18 @@ def run_training(
         from transformers import AutoModel, AutoTokenizer
 
         print(f"PyTorch 버전: {torch.__version__}")
-        print(f"CUDA 사용 가능: {torch.cuda.is_available()}")
-        if torch.cuda.is_available():
-            print(f"CUDA 장치: {torch.cuda.get_device_name(0)}")
+        print(f"CUDA 장치: {torch.cuda.get_device_name(0)}")
 
-            # CUDNN 자동 튜너 설정으로 속도 향상
-            torch.backends.cudnn.benchmark = True
-            print("cuDNN 벤치마크 모드 활성화")
+        # CUDNN 자동 튜너 설정으로 속도 향상
+        torch.backends.cudnn.benchmark = True
+        print("cuDNN 벤치마크 모드 활성화")
 
-            # Mixed Precision 지원 확인
-            if hasattr(torch.cuda, "amp") and use_mixed_precision:
-                print("Mixed Precision 학습 지원")
-            else:
-                use_mixed_precision = False
-                print("Mixed Precision 학습이 지원되지 않습니다")
+        # Mixed Precision 지원 확인
+        if hasattr(torch.cuda, "amp") and use_mixed_precision:
+            print("Mixed Precision 학습 지원")
         else:
             use_mixed_precision = False
+            print("Mixed Precision 학습이 지원되지 않습니다")
 
         print("모델 학습에 필요한 모든 패키지가 설치되어 있습니다.")
     except ImportError as e:
