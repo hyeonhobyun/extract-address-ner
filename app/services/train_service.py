@@ -246,6 +246,9 @@ class ModelTrainer:
                             attention_mask=attention_mask,
                             labels=labels,
                         )
+                        # loss가 스칼라가 아닌 경우 mean() 적용
+                        if loss.dim() > 0:
+                            loss = loss.mean()
                         # 그래디언트 누적을 위한 손실 스케일링
                         loss = loss / gradient_accumulation_steps
 
@@ -274,6 +277,9 @@ class ModelTrainer:
                         attention_mask=attention_mask,
                         labels=labels,
                     )
+                    # loss가 스칼라가 아닌 경우 mean() 적용
+                    if loss.dim() > 0:
+                        loss = loss.mean()
                     # 그래디언트 누적을 위한 손실 스케일링
                     loss = loss / gradient_accumulation_steps
                     loss.backward()

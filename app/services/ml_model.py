@@ -189,9 +189,14 @@ class RoBERTaBiLSTMCRF(nn.Module):
                 log_likelihood = self.crf(
                     logits, labels, mask=mask, reduction="mean"
                 )
-                loss = (
-                    -log_likelihood
-                )  # CRF는 로그 가능도를 최대화하므로 음수를 취함
+                # CRF는 로그 가능도를 최대화하므로 음수를 취함
+                # log_likelihood가 이미 스칼라인지 확인
+                if (
+                    isinstance(log_likelihood, torch.Tensor)
+                    and log_likelihood.dim() > 0
+                ):
+                    log_likelihood = log_likelihood.mean()
+                loss = -log_likelihood
 
             except Exception as e:
                 # 대체 손실 함수로 CrossEntropyLoss 사용
