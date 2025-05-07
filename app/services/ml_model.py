@@ -12,17 +12,27 @@ from ..utils.preprocess import (
 
 
 class AddressDataset(Dataset):
-    def __init__(self, data, tokenizer, max_len=128):
+    def __init__(
+        self, data, tokenizer, max_len=256
+    ):  # 최대 시퀀스 길이 증가 (128 -> 256)
         self.data = data
         self.tokenizer = tokenizer
         self.max_len = max_len
         self.label_map = {"O": 0, "B-ADDRESS": 1, "I-ADDRESS": 2}
 
+        # 라벨 인코딩 사전 계산 - 재사용을 위해 캐싱
+        self.encoded_data = []
+        for i, item in enumerate(data):
+            self.encoded_data.append(self._preprocess_item(item))
+
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        item = self.data[idx]
+        return self.encoded_data[idx]
+
+    def _preprocess_item(self, item):
+        """각 항목을 미리 전처리하여 캐싱"""
         text = item["text"]
 
         encoding = self.tokenizer(
@@ -90,8 +100,8 @@ class RoBERTaBiLSTMCRF(nn.Module):
         # CRF 레이어
         self.crf = CRF(num_labels, batch_first=True)
 
-        # 훈련 모드 플래그
-        self.training_mode = True
+        # 훈련 모드 플래그 (디버깅 출력 제어용)
+        self.training_mode = False
 
     def save_pretrained(self, save_directory):
         """사용자 정의 save_pretrained 메소드"""
@@ -134,7 +144,7 @@ class RoBERTaBiLSTMCRF(nn.Module):
         # 손실 계산
         loss = None
         if labels is not None:
-            # 디버깅 정보 출력 (첫번째 배치만)
+            # 디버깅 정보 출력 (훈련 모드에서만, 첫번째 배치만)
             if self.training_mode:
                 with torch.no_grad():
                     # 첫 번째 배치의 첫 번째 시퀀스 디버깅
@@ -175,7 +185,7 @@ class RoBERTaBiLSTMCRF(nn.Module):
                 # 마스크 변환
                 mask = attention_mask.bool()
 
-                # CRF 손실 계산
+                # CRF 손실 계산 (효율성 향상을 위해 예외 처리 간소화)
                 log_likelihood = self.crf(
                     logits, labels, mask=mask, reduction="mean"
                 )
@@ -184,14 +194,12 @@ class RoBERTaBiLSTMCRF(nn.Module):
                 )  # CRF는 로그 가능도를 최대화하므로 음수를 취함
 
             except Exception as e:
-                print(f"CRF 손실 계산 오류: {e}")
                 # 대체 손실 함수로 CrossEntropyLoss 사용
                 loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
                 active_loss = mask.view(-1) == 1
                 active_logits = logits.view(-1, self.num_labels)[active_loss]
                 active_labels = labels.view(-1)[active_loss]
                 loss = loss_fct(active_logits, active_labels)
-                print("대체 손실 함수(CrossEntropyLoss) 사용")
 
         return logits, loss
 
@@ -208,28 +216,29 @@ class RoBERTaBiLSTMCRF(nn.Module):
         else:
             mask = attention_mask.bool()
 
-        # CRF 디코딩 시도
+        # CRF 디코딩으로 최적의 태그 시퀀스 찾기 (간소화된 버전)
         try:
-            # CRF 디코딩으로 최적의 태그 시퀀스 찾기
             best_tags = self.crf.decode(logits, mask=mask)
 
-            # 결과를 텐서로 변환
-            result = []
-            for idx, tags in enumerate(best_tags):
-                # 현재 시퀀스의 마스크 길이 확인
-                seq_len = mask[idx].sum().item()
-                if seq_len == 0:  # 유효한 토큰이 없는 경우
-                    seq_len = 1  # 최소 1개는 반환
+            # 배치 내 모든 시퀀스에 대한 결과를 텐서로 변환
+            max_len = logits.shape[1]
+            result = torch.zeros(
+                (logits.shape[0], max_len),
+                dtype=torch.long,
+                device=logits.device,
+            )
 
-                # logits 텐서와 동일한 크기로 패딩
-                padded_tags = tags + [0] * (logits.shape[1] - len(tags))
-                result.append(padded_tags[: logits.shape[1]])
+            for i, tags in enumerate(best_tags):
+                # 패딩 처리 최적화
+                length = min(len(tags), max_len)
+                result[i, :length] = torch.tensor(
+                    tags[:length], dtype=torch.long, device=logits.device
+                )
 
-            return torch.tensor(result, device=logits.device)
+            return result
 
         except Exception as e:
-            # CRF 디코딩 실패 시 대체 방법으로 argmax 사용
-            print(f"CRF 디코딩 오류: {e}, argmax로 대체합니다.")
+            # 디코딩 실패 시 argmax 사용 (오류 메시지 없이 조용히 처리)
             return logits.argmax(dim=2)
 
 
@@ -301,13 +310,13 @@ class AddressModel:
 
         self.model.eval()
 
-        # 토큰화
+        # 토큰화 - 더 긴 텍스트를 처리할 수 있도록 최대 길이 증가
         encoding = self.tokenizer(
             text,
             return_offsets_mapping=True,
             padding=True,
             truncation=True,
-            max_length=128,
+            max_length=256,  # 기존 128에서 256으로 증가
             return_tensors="pt",
         )
 
@@ -318,12 +327,19 @@ class AddressModel:
         for key, value in encoding.items():
             encoding[key] = value.to(self.device)
 
-        # 예측
+        # 예측 - Mixed Precision 사용 (GPU 사용 시)
         with torch.no_grad():
-            logits, _ = self.model(
-                input_ids=encoding["input_ids"],
-                attention_mask=encoding["attention_mask"],
-            )
+            if torch.cuda.is_available():
+                with torch.cuda.amp.autocast():
+                    logits, _ = self.model(
+                        input_ids=encoding["input_ids"],
+                        attention_mask=encoding["attention_mask"],
+                    )
+            else:
+                logits, _ = self.model(
+                    input_ids=encoding["input_ids"],
+                    attention_mask=encoding["attention_mask"],
+                )
 
             # CRF 디코딩으로 최적 태그 시퀀스 얻기
             predictions = self.model.decode(logits, encoding["attention_mask"])
@@ -405,7 +421,7 @@ class AddressModel:
                 current_indices = []
                 current_confidences = []
 
-        # 마지막 주소가 남아있으면 추가
+        # 마지막 주소 처리
         if current_address:
             start_idx = current_indices[0][0]
             end_idx = current_indices[-1][1]
